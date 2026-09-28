@@ -648,7 +648,7 @@ void cycle_memory() {
     }
 }
 
-
+int MARMUX_out, PC_Out, ALU_Out, SHF_Out, MDR_Out;
 
 void eval_bus_drivers() {
 
@@ -661,7 +661,74 @@ void eval_bus_drivers() {
    *		 Gate_SHF,
    *		 Gate_MDR.
    */    
-
+    int* u = CURRENT_LATCHES.MICROINSTRUCTION;
+    // what happens in MARMUX
+    if (GetMARMUX(u) == 0) { // means that the MARMUX takes ZEXT(IR[7:0])
+        int zextIR = Low16bits((CURRENT_LATCHES.IR) & 0x00FF);
+        zextIR = zextIR << 1; // LSHF 1
+        MARMUX_out = Low16bits(zextIR);
+    }
+    else {
+        int addr1val, addr2val;
+        // other MARMUX, do address addition
+        if (GetADDR1MUX(u) == 0) {
+            // equals PC
+            addr1val = CURRENT_LATCHES.PC;
+        }
+        else {
+            // equals BaseR
+            int REG;
+            if (GetSR1MUX(u) == 0) {
+                // look at IR[11:9]
+                REG = (CURRENT_LATCHES.IR >> 9) & 0x7;
+            }
+            if (GetSR1MUX(u) == 0) {
+                // look at IR[8:6]
+                REG = (CURRENT_LATCHES.IR >> 6) & 0x7;
+            }
+            addr1val = CURRENT_LATCHES.REGS[REG]; // gets value of current baseR from sr1mux
+        }
+        int addr2mux = GetADDR2MUX(u);
+        if (addr2mux == 0) {
+            addr2val = 0;
+        }
+        else if (addr2mux == 1) {
+            // offset 6
+            int offset6 = Low16bits(CURRENT_LATCHES.IR & 0x3F);
+            // now sign extend
+            if (offset6 & 0x20) {
+                // MSB is 1, need sext
+                offset6 |= 0xFFC0; // fill in all high bits as 1
+            }
+            addr2val = offset6;
+        }
+        else if (addr2mux == 2) {
+            // pc offset 9
+            int offset6 = Low16bits(CURRENT_LATCHES.IR & 0x01FF);
+            // now sign extend
+            if (offset6 & 0x100) {
+                // MSB is 1, need sext
+                offset6 |= 0xFE00; // fill in all high bits as 1
+            }
+            addr2val = offset6;
+        }
+        else if (addr2mux == 3) {
+            // pc offset 11
+            int offset6 = Low16bits(CURRENT_LATCHES.IR & 0x07FF);
+            // now sign extend
+            if (offset6 & 0x400) {
+                // MSB is 1, need sext
+                offset6 |= 0xF800; // fill in all high bits as 1
+            }
+            addr2val = offset6;
+        }
+        if (GetLSHF1(u)) {
+            // if we need to do a shift
+            addr2val = addr2val << 1;
+        }
+        // add addr1val and addr2val, set to marmux output
+        MARMUX_out = Low16bits(addr1val + addr2val);
+    }
 }
 
 

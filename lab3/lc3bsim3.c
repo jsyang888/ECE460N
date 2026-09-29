@@ -682,7 +682,7 @@ void eval_bus_drivers() {
                 // look at IR[11:9]
                 REG = (CURRENT_LATCHES.IR >> 9) & 0x7;
             }
-            if (GetSR1MUX(u) == 0) {
+            else if  (GetSR1MUX(u)) {
                 // look at IR[8:6]
                 REG = (CURRENT_LATCHES.IR >> 6) & 0x7;
             }
@@ -801,7 +801,79 @@ void eval_bus_drivers() {
         // add addr1val and addr2val, set to PC output
         PC_Out = Low16bits(addr1val + addr2val);
     }
+    // what happens in ALU
+    // do SR2 mux first
+    int SR2MUX_out;
+    if (CURRENT_LATCHES.IR & 0x10) { 
+        // if the bit 5 is a 1, use the imm5
+        int IR_input = Low16Bits((CURRENT_LATCHES.IR >> 12) & 0xF);
+        if (IR_input & 0x8) {
+            // need to sign extend
+            IR_input = Low16bits(0xFFF0 | IR_input);
+        }
+        SR2MUX_out = IR_input;
+    }
+    else {
+        SR2MUX_out = CURRENT_LATCHES.REGS[(CURRENT_LATCHES.IR & 0x7)]; // mask for the last 3 bits, which are the SR2 bits
+    }
+    int SR1_val = 0;
+    if (GetSR1MUX(u) == 0) {
+        // this means that SR = IR[11:9]
+        SR1_val = CURRENT_LATCHES.REGS[Low16bits((CURRENT_LATCHES.IR >> 9) & 0x7)];
+    } 
+    else {
+        // this means that SR = IR[8:6]
+        SR1_val = CURRENT_LATCHES.REGS[Low16bits((CURRENT_LATCHES.IR >> 6) & 0x7)];
+    }
+    int ALU_MUX = GetALUK(u);
+    if (ALU_MUX == 0) {
+        // add
+        ALU_Out = Low16bits(SR1_val + SR2MUX_out);
+    }
+    else if (ALU_MUX == 1) {
+        // and
+        ALU_Out = Low16bits(SR1_val & SR2MUX_out);
+    }
+    else if (ALU_MUX == 2) {
+        // XOR
+        ALU_Out = Low16bits(SR1_val ^ SR2MUX_out);
+    }
+    else {
+        // PASS A, which is SR1
+        ALU_Out = SR1_val;
+    }
+    // what happens in SHF
+    // get SR1Out
+    if (GetSR1MUX(u) == 0) {
+        // this means that SR = IR[11:9]
+        SR1_val = CURRENT_LATCHES.REGS[Low16bits((CURRENT_LATCHES.IR >> 9) & 0x7)];
+    } 
+    else {
+        // this means that SR = IR[8:6]
+        SR1_val = CURRENT_LATCHES.REGS[Low16bits((CURRENT_LATCHES.IR >> 6) & 0x7)];
+    }
+    int steer = (CURRENT_LATCHES.IR >> 4) & 0x3; // mask for the two steer bits 
+    int shift_amt = (CURRENT_LATCHES.IR) & 0xF; // last four bits
+    if (steer == 0) {
+        // LSHF
+        SHF_Out = Low16bits(SR1_val << shift_amt); 
+    }
+    else if (steer == 1) {
+        // RSHFL
+        SHF_Out = Low16bits(SR1_val >> shift_amt);
+    }
+    else if (steer == 2) {
+        // RSHFA
+        int sign_bit = (SR1_val >> 15); // msb
+        SHF_Out = Low16bits(SR1_val >> shift_amt);
+        for (int i = 15; i > shift_amt; i--) {
+            SHF_Out |= 1 << i; // bit padding
+        }
+    }
+    // what happens in MDR
+    // TBD
 }
+
 
 
 void drive_bus() {

@@ -573,6 +573,7 @@ int main(int argc, char *argv[]) {
    Begin your code here 	  			       */
 /***************************************************************/
 
+int MEM_ALU();
 
 void eval_micro_sequencer() {
 
@@ -669,7 +670,244 @@ void eval_bus_drivers() {
         MARMUX_out = Low16bits(zextIR);
     }
     else {
-        int addr1val, addr2val;
+        MARMUX_out = MEM_ALU();
+    }
+    // what happens in PC
+    PC_Out = CURRENT_LATCHES.PC;
+    // what happens in ALU
+    // do SR2 mux first
+    int SR2MUX_out;
+    if (CURRENT_LATCHES.IR & 0x20) { 
+        // if the bit 4 is a 1, use the imm5
+        int IR_input = Low16bits(CURRENT_LATCHES.IR & 0x1F);
+        if (IR_input & 0x10) {
+            // need to sign extend
+            IR_input = Low16bits(0xFFE0 | IR_input);
+        }
+        SR2MUX_out = IR_input;
+    }
+    else {
+        SR2MUX_out = CURRENT_LATCHES.REGS[(CURRENT_LATCHES.IR & 0x7)]; // mask for the last 3 bits, which are the SR2 bits
+    }
+    int SR1_val = 0;
+    if (GetSR1MUX(u) == 0) {
+        // this means that SR = IR[11:9]
+        SR1_val = CURRENT_LATCHES.REGS[Low16bits((CURRENT_LATCHES.IR >> 9) & 0x7)];
+    } 
+    else {
+        // this means that SR = IR[8:6]
+        SR1_val = CURRENT_LATCHES.REGS[Low16bits((CURRENT_LATCHES.IR >> 6) & 0x7)];
+    }
+    int ALU_MUX = GetALUK(u);
+    if (ALU_MUX == 0) {
+        // add
+        ALU_Out = Low16bits(SR1_val + SR2MUX_out);
+    }
+    else if (ALU_MUX == 1) {
+        // and
+        ALU_Out = Low16bits(SR1_val & SR2MUX_out);
+    }
+    else if (ALU_MUX == 2) {
+        // XOR
+        ALU_Out = Low16bits(SR1_val ^ SR2MUX_out);
+    }
+    else {
+        // PASS A, which is SR1
+        ALU_Out = SR1_val;
+    }
+    // what happens in SHF
+    // get SR1Out
+    if (GetSR1MUX(u) == 0) {
+        // this means that SR = IR[11:9]
+        SR1_val = CURRENT_LATCHES.REGS[Low16bits((CURRENT_LATCHES.IR >> 9) & 0x7)];
+    } 
+    else {
+        // this means that SR = IR[8:6]
+        SR1_val = CURRENT_LATCHES.REGS[Low16bits((CURRENT_LATCHES.IR >> 6) & 0x7)];
+    }
+    int steer = (CURRENT_LATCHES.IR >> 4) & 0x3; // mask for the two steer bits 
+    int shift_amt = (CURRENT_LATCHES.IR) & 0xF; // last four bits
+    if (steer == 0) {
+        // LSHF
+        SHF_Out = Low16bits(SR1_val << shift_amt); 
+    }
+    else if (steer == 1) {
+        // RSHFL
+        SHF_Out = Low16bits(SR1_val >> shift_amt);
+    }
+    else if (steer == 3) {
+        // RSHFA
+        int sign_bit = (SR1_val >> 15); // msb
+        SHF_Out = Low16bits(SR1_val >> shift_amt);
+        if (sign_bit) {
+            for (int i = 0; i < shift_amt; i++) {
+                SHF_Out |= 1 << (15-i); // bit padding
+            }
+        }    
+    }
+    // what happens in MDR
+    // first block encountered after bus
+    int mar = CURRENT_LATCHES.MAR;
+    if (GetDATA_SIZE(u) == 1) {
+        //word sized
+        MDR_Out = Low16bits(CURRENT_LATCHES.MDR);
+    }
+    else {
+        //byte sized, now look at MAR[0] to see if to load into high or low byte of bus
+        int byte;
+        if ((mar & 0x1) == 0) {
+            // this means that even, load into low bits?
+            byte = CURRENT_LATCHES.MDR & 0xFF;
+        }
+        else {
+            // this means odd, put into high bits
+            byte = (CURRENT_LATCHES.MDR >> 8) & 0xFF;
+        }
+        if (byte & 0x80) {
+            // need sext
+            byte |= 0xFF00;
+        }
+        MDR_Out = Low16bits(byte);
+    }
+
+}
+
+
+
+void drive_bus() {
+  /* 
+   * Datapath routine for driving the bus from one of the 5 possible 
+   * tristate drivers. 
+   */  
+  int* u = CURRENT_LATCHES.MICROINSTRUCTION;
+  BUS = 0; // reset bus
+  if (GetGATE_PC(u) == 1) {
+    BUS = PC_Out;
+  }     
+  else if (GetGATE_MARMUX(u)) {
+    BUS = MARMUX_out;
+  }
+  else if (GetGATE_ALU(u)) {
+    BUS = ALU_Out;
+  } 
+  else if (GetGATE_SHF(u)) {
+    BUS = SHF_Out;
+  }
+  else if (GetGATE_MDR(u)) {
+    BUS = MDR_Out;
+  }
+  BUS = Low16bits(BUS); // limit to 16 bits to prevent overflows
+}
+
+
+void latch_datapath_values() {
+
+  /* 
+   * Datapath routine for computing all functions that need to latch
+   * values in the data path at the end of this cycle.  Some values
+   * require sourcing the bus; therefore, this routine has to come 
+   * after drive_bus.
+   */       
+    int* u = CURRENT_LATCHES.MICROINSTRUCTION;
+    // LD MAR
+    if (GetLD_MAR(u)) {
+        NEXT_LATCHES.MAR = BUS;
+    }
+    // LD MDR
+    // gets next MDR
+    if (GetLD_MDR(u)) {
+        if (GetMIO_EN(u)) {
+            if (CURRENT_LATCHES.READY) {
+                // ready
+                int row = CURRENT_LATCHES.MAR >> 1;
+                NEXT_LATCHES.MDR = Low16bits(MEMORY[row][0] | (MEMORY[row][1] << 8));
+
+            }    
+        }  
+        else {
+            // get from bus
+            if (GetDATA_SIZE(u)) {
+                NEXT_LATCHES.MDR = Low16bits(BUS);
+            }
+            else {
+                // byte sized
+                int byte = BUS & 0xFF;
+                if ((CURRENT_LATCHES.MAR & 1) == 0) {
+                    NEXT_LATCHES.MDR = byte;
+                }
+                else {
+                    NEXT_LATCHES.MDR = byte << 8;
+                }
+            }
+        }  
+    }
+    // LD IR
+    // gets next IR
+    if (GetLD_IR(u)) {
+        NEXT_LATCHES.IR = BUS;
+    }
+    // LD REG
+    // uses DR MUX to select 
+    if (GetLD_REG(u)) {
+        if (GetDRMUX(u) == 0) {
+            // this means that the next reg is from IR[11:9]
+            int DR = ((CURRENT_LATCHES.IR) & 0xE00) >> 9; // masks for 11:9 and then moves them into three lowest positions
+            NEXT_LATCHES.REGS[DR] = BUS;
+        }
+        else {
+            // that means that R7 is chosen
+            NEXT_LATCHES.REGS[7] = BUS;
+        }
+    }
+    // LD CC
+    if (GetLD_CC(u)) {
+        if (Low16bits(BUS) == 0) {
+            // set Z bit
+            NEXT_LATCHES.N = 0;
+            NEXT_LATCHES.Z = 1;
+            NEXT_LATCHES.P = 0;
+        }
+        else if (Low16bits(BUS) & 0x8000) {
+            // first bit is a 1, negative, set N bit
+            NEXT_LATCHES.N = 1;
+            NEXT_LATCHES.Z = 0;
+            NEXT_LATCHES.P = 0;
+        }
+        else {
+            // must be positive
+            NEXT_LATCHES.N = 0;
+            NEXT_LATCHES.Z = 0;
+            NEXT_LATCHES.P = 1;
+        }
+    }
+    // LD BEN
+    if (GetLD_BEN(u)) {
+        int IR = CURRENT_LATCHES.IR;
+        NEXT_LATCHES.BEN = (((IR >> 11) & 1) & CURRENT_LATCHES.N) | (((IR >> 10) & 1) & CURRENT_LATCHES.Z) | (((IR >> 9) & 1) & CURRENT_LATCHES.P);
+        // if any one of these is true, then branches
+    }    
+    // LD PC
+    if (GetLD_PC(u)) {
+        int PCMUX = GetPCMUX(u);
+        if (PCMUX == 0) {
+            // selects PC + 2
+            NEXT_LATCHES.PC = Low16bits(CURRENT_LATCHES.PC + 2);
+        }
+        else if (PCMUX == 1) {
+            // selects BUS value
+            NEXT_LATCHES.PC = BUS;
+        }
+        else if (PCMUX == 2) {
+            // selects address adder
+            NEXT_LATCHES.PC = MEM_ALU();
+        }
+    }
+}
+
+
+int MEM_ALU() {
+    int* u = CURRENT_LATCHES.MICROINSTRUCTION;
+    int addr1val, addr2val;
         // other MARMUX, do address addition
         if (GetADDR1MUX(u) == 0) {
             // equals PC
@@ -727,172 +965,5 @@ void eval_bus_drivers() {
             addr2val = addr2val << 1;
         }
         // add addr1val and addr2val, set to marmux output
-        MARMUX_out = Low16bits(addr1val + addr2val);
-    }
-    // what happens in PC
-    int pcmux = GetPCMUX(u);
-    if (pcmux == 0) {
-        // PC+2 val
-        PC_Out = CURRENT_LATCHES.PC + 2;
-    }
-    else if (pcmux == 1) {
-        // PC = Bus
-        PC_Out = BUS;
-    }
-    else if (pcmux == 2) {
-        // adder, copy code from MARMUX area
-        int addr1val, addr2val;
-        // other MARMUX, do address addition
-        if (GetADDR1MUX(u) == 0) {
-            // equals PC
-            addr1val = CURRENT_LATCHES.PC;
-        }
-        else {
-            // equals BaseR
-            int REG;
-            if (GetSR1MUX(u) == 0) {
-                // look at IR[11:9]
-                REG = (CURRENT_LATCHES.IR >> 9) & 0x7;
-            }
-            if (GetSR1MUX(u) == 0) {
-                // look at IR[8:6]
-                REG = (CURRENT_LATCHES.IR >> 6) & 0x7;
-            }
-            addr1val = CURRENT_LATCHES.REGS[REG]; // gets value of current baseR from sr1mux
-        }
-        int addr2mux = GetADDR2MUX(u);
-        if (addr2mux == 0) {
-            addr2val = 0;
-        }
-        else if (addr2mux == 1) {
-            // offset 6
-            int offset6 = Low16bits(CURRENT_LATCHES.IR & 0x3F);
-            // now sign extend
-            if (offset6 & 0x20) {
-                // MSB is 1, need sext
-                offset6 |= 0xFFC0; // fill in all high bits as 1
-            }
-            addr2val = offset6;
-        }
-        else if (addr2mux == 2) {
-            // pc offset 9
-            int offset6 = Low16bits(CURRENT_LATCHES.IR & 0x01FF);
-            // now sign extend
-            if (offset6 & 0x100) {
-                // MSB is 1, need sext
-                offset6 |= 0xFE00; // fill in all high bits as 1
-            }
-            addr2val = offset6;
-        }
-        else if (addr2mux == 3) {
-            // pc offset 11
-            int offset6 = Low16bits(CURRENT_LATCHES.IR & 0x07FF);
-            // now sign extend
-            if (offset6 & 0x400) {
-                // MSB is 1, need sext
-                offset6 |= 0xF800; // fill in all high bits as 1
-            }
-            addr2val = offset6;
-        }
-        if (GetLSHF1(u)) {
-            // if we need to do a shift
-            addr2val = addr2val << 1;
-        }
-        // add addr1val and addr2val, set to PC output
-        PC_Out = Low16bits(addr1val + addr2val);
-    }
-    // what happens in ALU
-    // do SR2 mux first
-    int SR2MUX_out;
-    if (CURRENT_LATCHES.IR & 0x10) { 
-        // if the bit 5 is a 1, use the imm5
-        int IR_input = Low16Bits((CURRENT_LATCHES.IR >> 12) & 0xF);
-        if (IR_input & 0x8) {
-            // need to sign extend
-            IR_input = Low16bits(0xFFF0 | IR_input);
-        }
-        SR2MUX_out = IR_input;
-    }
-    else {
-        SR2MUX_out = CURRENT_LATCHES.REGS[(CURRENT_LATCHES.IR & 0x7)]; // mask for the last 3 bits, which are the SR2 bits
-    }
-    int SR1_val = 0;
-    if (GetSR1MUX(u) == 0) {
-        // this means that SR = IR[11:9]
-        SR1_val = CURRENT_LATCHES.REGS[Low16bits((CURRENT_LATCHES.IR >> 9) & 0x7)];
-    } 
-    else {
-        // this means that SR = IR[8:6]
-        SR1_val = CURRENT_LATCHES.REGS[Low16bits((CURRENT_LATCHES.IR >> 6) & 0x7)];
-    }
-    int ALU_MUX = GetALUK(u);
-    if (ALU_MUX == 0) {
-        // add
-        ALU_Out = Low16bits(SR1_val + SR2MUX_out);
-    }
-    else if (ALU_MUX == 1) {
-        // and
-        ALU_Out = Low16bits(SR1_val & SR2MUX_out);
-    }
-    else if (ALU_MUX == 2) {
-        // XOR
-        ALU_Out = Low16bits(SR1_val ^ SR2MUX_out);
-    }
-    else {
-        // PASS A, which is SR1
-        ALU_Out = SR1_val;
-    }
-    // what happens in SHF
-    // get SR1Out
-    if (GetSR1MUX(u) == 0) {
-        // this means that SR = IR[11:9]
-        SR1_val = CURRENT_LATCHES.REGS[Low16bits((CURRENT_LATCHES.IR >> 9) & 0x7)];
-    } 
-    else {
-        // this means that SR = IR[8:6]
-        SR1_val = CURRENT_LATCHES.REGS[Low16bits((CURRENT_LATCHES.IR >> 6) & 0x7)];
-    }
-    int steer = (CURRENT_LATCHES.IR >> 4) & 0x3; // mask for the two steer bits 
-    int shift_amt = (CURRENT_LATCHES.IR) & 0xF; // last four bits
-    if (steer == 0) {
-        // LSHF
-        SHF_Out = Low16bits(SR1_val << shift_amt); 
-    }
-    else if (steer == 1) {
-        // RSHFL
-        SHF_Out = Low16bits(SR1_val >> shift_amt);
-    }
-    else if (steer == 2) {
-        // RSHFA
-        int sign_bit = (SR1_val >> 15); // msb
-        SHF_Out = Low16bits(SR1_val >> shift_amt);
-        for (int i = 15; i > shift_amt; i--) {
-            SHF_Out |= 1 << i; // bit padding
-        }
-    }
-    // what happens in MDR
-    // TBD
-}
-
-
-
-void drive_bus() {
-
-  /* 
-   * Datapath routine for driving the bus from one of the 5 possible 
-   * tristate drivers. 
-   */       
-
-}
-
-
-void latch_datapath_values() {
-
-  /* 
-   * Datapath routine for computing all functions that need to latch
-   * values in the data path at the end of this cycle.  Some values
-   * require sourcing the bus; therefore, this routine has to come 
-   * after drive_bus.
-   */       
-
+        return(Low16bits(addr1val + addr2val));
 }

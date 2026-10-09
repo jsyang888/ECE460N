@@ -603,6 +603,7 @@ void eval_micro_sequencer() {
     memcpy(NEXT_LATCHES.MICROINSTRUCTION, CONTROL_STORE[next_state], sizeof(int) * CONTROL_STORE_BITS);    
 }
 
+
 int cycle_count = 0;
 void cycle_memory() {
  
@@ -649,8 +650,8 @@ void cycle_memory() {
     }
 }
 
-int MARMUX_out, PC_Out, ALU_Out, SHF_Out, MDR_Out;
 
+int MARMUX_out, PC_Out, ALU_Out, SHF_Out, MDR_Out;
 void eval_bus_drivers() {
 
   /* 
@@ -771,7 +772,6 @@ void eval_bus_drivers() {
     }
 
 }
-
 
 
 void drive_bus() {

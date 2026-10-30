@@ -241,8 +241,14 @@ void cycle() {
   latch_datapath_values();
 
   CURRENT_LATCHES = NEXT_LATCHES;
-
   CYCLE_COUNT++;
+  if (CYCLE_COUNT == 300) {
+    CURRENT_LATCHES.INT_PENDING = 1;
+    NEXT_LATCHES.INT_PENDING = 1;
+
+    CURRENT_LATCHES.INTV = 0x01;
+    NEXT_LATCHES.INTV = 0x01;
+}
 }
 
 /***************************************************************/
@@ -552,7 +558,7 @@ void initialize(char *argv[], int num_prog_files) {
     CURRENT_LATCHES.STATE_NUMBER = INITIAL_STATE_NUMBER;
     memcpy(CURRENT_LATCHES.MICROINSTRUCTION, CONTROL_STORE[INITIAL_STATE_NUMBER], sizeof(int)*CONTROL_STORE_BITS);
     CURRENT_LATCHES.SSP = 0x3000; /* Initial value of system stack pointer */
-
+    CURRENT_LATCHES.PSR = 0x8000; // initially in user mode
     NEXT_LATCHES = CURRENT_LATCHES;
 
     RUN_BIT = TRUE;

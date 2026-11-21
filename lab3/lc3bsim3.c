@@ -584,7 +584,7 @@ void eval_micro_sequencer() {
   // looking at figure C5:
     int *u = CURRENT_LATCHES.MICROINSTRUCTION;
     int next_state;
-    if (GetIRD(u) == 1) { // if the mux is selected to the 
+    if (GetIRD(u) == 1) { // if the mux is selected to the IR
         next_state = (CURRENT_LATCHES.IR >> 12) & 0xF; // keeps IR 15:12 and discards all else 
     }
     else {

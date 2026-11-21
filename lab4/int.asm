@@ -15,7 +15,6 @@
     LDW R0, R6, #0
     ADD R6, R6, #2
 
-    RTI
-
-
+    RTI ; x121a
 increment .FILL x4000
+.END

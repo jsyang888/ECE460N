@@ -14,7 +14,7 @@
     ; initialize program variables
 
 LOOP LDW R1, R0, #0
-    ADD R2, R2, #-2 ; this clears the reference bit
+    AND R1, R1, #-2 ; this clears the reference bit
     STW R1, R0, #0
     ADD R0, R0, #2
     ADD R2, R2, #-1

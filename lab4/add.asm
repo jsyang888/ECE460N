@@ -1,5 +1,4 @@
 .ORIG x3000
-    .FILL xA000
     LEA R0, initialize
     LDW R0, R0, #0
     LDW R1, R0, #0
@@ -25,6 +24,9 @@ Loop
     LEA R0, sum
     LDW R0, R0, #0
     STW R4, R0, #0 ; store, done
+    LEA R0, fakesum
+    LDW R0, R0, #0
+    STW R4, R0, #0 ; attempt to store afterwards at fake address to trigger exception
 
 HALT
 
@@ -32,4 +34,7 @@ HALT
 
 start .FILL xC000
 sum .FILL xC014
-initialize .FILL x0001
+fakesum .FILL x0000 ; should cause protection violation
+initialize .FILL x4000
+
+.END
